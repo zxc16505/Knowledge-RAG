@@ -1,6 +1,6 @@
-# knowledge-rag — 权限感知 RAG 问答运行时
+# Knowledge-RAG — 权限感知 RAG 问答运行时
 
-[![CI](https://github.com/<GH_USER>/knowledge-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/<GH_USER>/knowledge-rag/actions/workflows/ci.yml)
+[![CI](https://github.com/zxc16505/Knowledge-RAG/actions/workflows/ci.yml/badge.svg)](https://github.com/zxc16505/Knowledge-RAG/actions/workflows/ci.yml)
 
 个人项目：一个把"企业知识库问答"做成**可验收成果**的最小运行时——检索在服务端按提问人身份做部门硬过滤，权限约束在模型上下文之外确定性生效，提示词注入无法绕过。
 
