@@ -38,7 +38,8 @@ jobs:
             cd /opt/knowledge-rag
             git pull --ff-only origin main
             docker compose up -d --build
-            # 部署后冒烟：健康检查 + 内部调试口 fail-closed 行为不应变化
+            # 部署后冒烟：/health 需 API Key（v1.2 起），从服务器本地 .env 读取
             sleep 5
-            curl -sf http://127.0.0.1:8000/health
+            set -a; . ./.env; set +a
+            curl -sf -H "X-API-Key: $API_GLOBAL_KEY" http://127.0.0.1:8000/health
             echo "deploy ok"

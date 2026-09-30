@@ -26,7 +26,8 @@ mkdir -p rag_data
 cp feishu_demo/dept_map.json rag_data/dept_map.json
 
 docker compose up -d --build
-curl http://127.0.0.1:8000/health    # {"status":"ok","mode":"keyword",...}
+set -a; . ./.env; set +a
+curl -H "X-API-Key: $API_GLOBAL_KEY" http://127.0.0.1:8000/health   # {"status":"ok","embedding":false,"qdrant":true}
 ```
 
 想启用真向量检索：把 `bge-base-zh-v1.5` 模型放到 `./models/BAAI/bge-base-zh-v1.5/`，重启即可（compose 已配 `HF_HUB_OFFLINE=1`，全程离线）。
@@ -52,7 +53,7 @@ echo "PRIVATE_KEY 内容 = ~/.ssh/github_deploy"
 ## 4. 本地验证部署链路（可选）
 
 ```bash
-ssh -i ~/.ssh/github_deploy $DEPLOY_USER@$DEPLOY_HOST "curl -s http://127.0.0.1:8000/health"
+ssh -i ~/.ssh/github_deploy $DEPLOY_USER@$DEPLOY_HOST ". /opt/knowledge-rag/.env; curl -s -H \"X-API-Key: \$API_GLOBAL_KEY\" http://127.0.0.1:8000/health"
 ```
 
 ## 安全注意
