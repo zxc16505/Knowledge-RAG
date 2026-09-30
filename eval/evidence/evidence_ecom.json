@@ -1,0 +1,58 @@
+{
+  "golden": "D:/项目/job/知识库项目材料/eval\\evidence\\golden_set_ecom.json",
+  "scene": "模拟中型电商企业知识库（四品牌：百斯盾/猫人/红豆/百家好；含商品成分、尺码、颜色编码、销售报表、库存、各部门SOP、平台规则、合格证规范）",
+  "n_docs": 32,
+  "n_queries": 34,
+  "repro_main_topk10_vec_only": [
+    {
+      "run": 1,
+      "vec": {
+        "n_queries": 34,
+        "MRR": 0.9363,
+        "recall@1": 0.8824,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    {
+      "run": 2,
+      "vec": {
+        "n_queries": 34,
+        "MRR": 0.9363,
+        "recall@1": 0.8824,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    {
+      "run": 3,
+      "vec": {
+        "n_queries": 34,
+        "MRR": 0.9363,
+        "recall@1": 0.8824,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      }
+    }
+  ],
+  "vec_rerank": {
+    "topk10_once": {
+      "vec": {
+        "n_queries": 34,
+        "MRR": 0.9363,
+        "recall@1": 0.8824,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      },
+      "vec_rerank": {
+        "n_queries": 34,
+        "MRR": 0.9853,
+        "recall@1": 0.9706,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "elapsed_rerank_s": 211.5
+  },
+  "note": "向量单阶段 + rerank 主配置对比均完成"
+}

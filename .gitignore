@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+rag_data/
+models/
+*.npz
+*.bin
+*.safetensors
+venv/
+.venv/
+*.log

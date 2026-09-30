@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  security-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lightweight deps (keyword fallback mode, no heavy models needed)
+        run: pip install "fastapi>=0.111" "uvicorn[standard]>=0.30" pydantic httpx
+
+      - name: Compile check
+        run: python -m py_compile rag_api/app.py rag_api/mock_feishu_event.py
+
+      - name: Start service with demo vault
+        env:
+          VAULT_PATH: ${{ github.workspace }}/feishu_demo/demo_vault
+          DEPT_MAP_PATH: ${{ github.workspace }}/feishu_demo/dept_map.json
+          FEISHU_ENCRYPT_KEY: ci_demo_encrypt_key
+          API_GLOBAL_KEY: ci_demo_api_key
+          QDRANT_URL: ""
+        run: |
+          cd rag_api
+          nohup python -m uvicorn app:app --host 127.0.0.1 --port 8000 > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/health && break
+            sleep 2
+          done
+          curl -sf -X POST -H "X-API-Key: ci_demo_api_key" http://127.0.0.1:8000/api/reload
+          curl -sf http://127.0.0.1:8000/health
+
+      - name: Run 7 security regression cases (expect 7/7 PASS)
+        env:
+          FEISHU_ENCRYPT_KEY: ci_demo_encrypt_key
+          API_GLOBAL_KEY: ci_demo_api_key
+        run: cd rag_api && python mock_feishu_event.py
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose
+        run: docker compose config -q

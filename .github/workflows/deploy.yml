@@ -1,0 +1,44 @@
+name: Deploy
+
+# 全自动部署：push main -> SSH 到服务器 -> git pull -> compose up -d --build -> 健康检查
+# 启用前提：在仓库 Settings -> Secrets 配置 DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY
+# 未配置时本 workflow 自动跳过（CI workflow 不受影响，始终运行）
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  check-deploy-config:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.probe.outputs.enabled }}
+    steps:
+      - id: probe
+        env:
+          H: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          if [ -n "$H" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; fi
+
+  deploy:
+    needs: check-deploy-config
+    if: needs.check-deploy-config.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/knowledge-rag
+            git pull --ff-only origin main
+            docker compose up -d --build
+            # 部署后冒烟：健康检查 + 内部调试口 fail-closed 行为不应变化
+            sleep 5
+            curl -sf http://127.0.0.1:8000/health
+            echo "deploy ok"

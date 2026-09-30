@@ -1,0 +1,58 @@
+# 知识库问答运行时（个人演示版）编排
+# 自包含相对路径：clone 仓库后 `cp .env.example .env` 改密钥，`docker compose up -d --build` 即可跑通。
+# 目录约定（相对仓库根）：
+#   ./feishu_demo/demo_vault  -> 只读挂载到 rag_api:/vault（演示语料，按部门分目录）
+#   ./models                  -> 可选：离线 bge 模型目录；不存在时服务自动降级关键词检索
+#   ./rag_data                -> 运行时数据（qdrant 存储 / 索引状态 / gitea 数据 / dept_map.json）
+
+services:
+  gitea:
+    image: gitea/gitea:1.22
+    container_name: knowledge_gitea
+    environment:
+      - GITEA__security__SECRET_KEY=${WEBHOOK_SECRET}
+      - GITEA__server__ROOT_URL=http://localhost:3000/
+    ports:
+      - "3000:3000"          # 开发者 push 笔记 -> webhook 触发增量重建
+    volumes:
+      - ./rag_data/gitea:/data
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: knowledge_qdrant
+    expose:
+      - "6333"               # 仅内网可达，不映射宿主机端口
+    volumes:
+      - ./rag_data/qdrant:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rag_api:
+    build: ./rag_api
+    container_name: knowledge_rag_api
+    environment:
+      - API_GLOBAL_KEY=${API_GLOBAL_KEY}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - FEISHU_ENCRYPT_KEY=${FEISHU_ENCRYPT_KEY}
+      - QDRANT_URL=http://qdrant:6333
+      - EMBED_MODEL_PATH=/models/BAAI/bge-base-zh-v1.5
+      - HF_HUB_OFFLINE=1
+      - VAULT_PATH=/vault
+      - DEPT_MAP_PATH=/app/data/dept_map.json
+      - SHARED_DEPT=公共
+      - ALLOW_UNKNOWN_DEPT=false          # fail-closed：未知身份默认拒绝
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./feishu_demo/demo_vault:/vault:ro   # 只读挂载：RAG 程序绝不写入源笔记
+      - ./models:/models:ro
+      - ./rag_data:/app/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
