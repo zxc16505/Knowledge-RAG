@@ -4,3 +4,5 @@ qdrant-client==1.9.0
 pydantic==2.7.4
 # 以下为可选（离线向量/重排模型）；缺失时服务自动降级为关键词检索，仍可启动演示
 sentence-transformers==2.7.0
+# 可选：ws_bridge.py（飞书长连接接法）需要；Webhook 模式不需要
+lark-oapi>=2.0.0

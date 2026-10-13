@@ -30,10 +30,19 @@ import glob
 import time
 import hashlib
 import hmac
+import logging
+import collections
+import urllib.request
 from typing import Dict, List, Optional, Set
 
-from fastapi import FastAPI, Header, HTTPException, Request, Depends
+from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Request, Depends
 from pydantic import BaseModel
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+log = logging.getLogger("rag_api")
 
 API_KEY = os.getenv("API_GLOBAL_KEY", "dev_key")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
@@ -48,6 +57,18 @@ DEPT_MAP_PATH = os.getenv("DEPT_MAP_PATH", "/app/data/dept_map.json")
 SHARED_DEPT = os.getenv("SHARED_DEPT", "公共")
 # 找不到映射时是否放行到共享域。默认 false = 默认拒绝（fail-closed）
 ALLOW_UNKNOWN = os.getenv("ALLOW_UNKNOWN_DEPT", "false").lower() in ("1", "true", "yes")
+
+# ---- 飞书回复：把检索结果回给提问人 ----
+FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+FEISHU_REPLY_ENABLED = os.getenv("FEISHU_REPLY_ENABLED", "true").lower() in ("1", "true", "yes")
+# 可选：接 OpenAI 兼容接口的大模型生成答案（DeepSeek / Qwen 等）；不配则回拼接的检索片段
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "")
+# 飞书事件去重（飞书超时会重推同一事件，避免重复回复）
+_SEEN_EVENTS: "collections.OrderedDict" = collections.OrderedDict()
+_MAX_SEEN = 500
 
 # ---- 能力探测（降级开关）----
 try:
@@ -226,6 +247,85 @@ def do_retrieve(query: str, depts: List[str], top_k: int = 3) -> dict:
     }
 
 
+# ---------- 答案组装与飞书回复 ----------
+def _is_duplicate(event_id: Optional[str]) -> bool:
+    """飞书事件去重：超时重推时同一 event_id 只处理一次，避免重复回复。"""
+    if not event_id:
+        return False
+    if event_id in _SEEN_EVENTS:
+        return True
+    _SEEN_EVENTS[event_id] = time.time()
+    while len(_SEEN_EVENTS) > _MAX_SEEN:
+        _SEEN_EVENTS.popitem(last=False)
+    return False
+
+
+def _fallback_answer(results: dict) -> str:
+    """无大模型时的降级回答：直接回检索到的原文片段与来源。"""
+    hits = results.get("results") or []
+    if not hits:
+        return "没找到相关内容——可能不在你所在部门的可检索范围内。"
+    lines = ["根据知识库检索到以下内容："]
+    for i, h in enumerate(hits, 1):
+        src = os.path.basename(str(h.get("source", "")))
+        lines.append(f"{i}. {str(h.get('text', '')).strip()}\n   来源：{src}")
+    return "\n".join(lines)
+
+
+def _llm_answer(query: str, results: dict) -> str:
+    """用 OpenAI 兼容接口生成答案（只依据检索片段，禁止编造）。"""
+    ctx = "\n\n".join(
+        f"[{i}] {h.get('text', '')}" for i, h in enumerate(results.get("results") or [], 1)
+    )
+    prompt = (
+        "只依据下面给出的资料回答问题；资料里没有的信息就直说「知识库中没有相关内容」，不要编造。\n\n"
+        f"资料：\n{ctx}\n\n问题：{query}"
+    )
+    body = json.dumps(
+        {
+            "model": LLM_MODEL,
+            "temperature": 0.2,
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        LLM_BASE_URL.rstrip("/") + "/chat/completions",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {LLM_API_KEY}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read().decode("utf-8", "replace"))
+    return d["choices"][0]["message"]["content"].strip()
+
+
+def compose_answer(query: str, results: dict) -> str:
+    """组装给用户的回答：配了大模型就用大模型，否则回检索片段。"""
+    if LLM_BASE_URL and LLM_API_KEY and LLM_MODEL:
+        try:
+            return _llm_answer(query, results)
+        except Exception as e:
+            log.warning("大模型生成失败，降级为检索片段：%s", e)
+    return _fallback_answer(results)
+
+
+def reply_to_feishu(open_id: str, text: str) -> None:
+    """后台任务：把答案发回飞书。失败只记日志，不影响事件应答。"""
+    try:
+        try:
+            from .feishu_client import FeishuClient
+        except ImportError:
+            from feishu_client import FeishuClient
+        mid = FeishuClient().send_text(open_id, text)
+        log.info("[已回复飞书] open_id=%s message_id=%s", open_id, mid)
+    except Exception as e:
+        log.error("[回复飞书失败] open_id=%s: %s", open_id, e)
+
+
 class RetrieveReq(BaseModel):
     query: str
     top_k: int = 3
@@ -240,15 +340,15 @@ def retrieve(r: RetrieveReq, _=Depends(auth)):
 
 
 @app.post("/feishu/event")
-async def feishu_event(req: Request):
+async def feishu_event(req: Request, bg: BackgroundTasks):
     """员工消息入口（对外路径，无需 API Key，靠飞书签名鉴权）。
 
     飞书把事件 JSON POST 到此，带头 X-Lark-Request-Timestamp /
     X-Lark-Request-Nonce / X-Lark-Signature。本端点：
       1. 验签（verify_feishu_signature）—— 伪造/篡改一律 403
       2. 从【已验签事件体】取 event.sender.sender_id.open_id 作为身份
-         —— 客户端无法在请求里塞 user_id 改部门域，因为这里根本不看请求体里的身份字段
       3. 按 open_id 解析部门 -> do_retrieve 硬过滤
+      4. 组装回答 -> 后台任务发回飞书（接口立即应答，避免飞书超时重推）
     这是“授权在模型之外”的真实落点：提示注入只能改 query 文本，过滤域纹丝不动。
     """
     ts = req.headers.get("X-Lark-Request-Timestamp", "")
@@ -264,6 +364,11 @@ async def feishu_event(req: Request):
     # 飞书回调 URL 验证回执
     if payload.get("type") == "url_verification":
         return {"challenge": payload.get("challenge", "")}
+    # 飞书超时重推去重
+    event_id = (payload.get("header") or {}).get("event_id")
+    if _is_duplicate(event_id):
+        log.info("[重复事件已忽略] event_id=%s", event_id)
+        return {"code": 0, "msg": "duplicate ignored"}
     # 从已验签事件提取提问人身份（唯一可信来源）
     event = payload.get("event", {})
     sender_id = event.get("sender", {}).get("sender_id", {})
@@ -277,10 +382,24 @@ async def feishu_event(req: Request):
     except Exception:
         text = ""
     depts = resolve_depts(open_id)
+    if not depts:
+        # 未命中身份 fail-closed，同时记录 open_id，方便收集后授权
+        log.warning(
+            "[身份未命中] open_id=%s 不在 dept_map（fail-closed，无结果）。"
+            "授权方式：把该 open_id 加进 dept_map.json",
+            open_id,
+        )
+    result = do_retrieve(text, depts, 3)
+    answer = compose_answer(text, result)
+    # 后台回复：接口立即返回，避免飞书 3 秒超时重推
+    if FEISHU_REPLY_ENABLED and text:
+        bg.add_task(reply_to_feishu, open_id, answer)
     return {
+        "code": 0,
         "open_id": open_id,
         "department_scope": depts,
-        "retrieval": do_retrieve(text, depts, 3),
+        "retrieval": result,
+        "reply": answer,
     }
 
 
