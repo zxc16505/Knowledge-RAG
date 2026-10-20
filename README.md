@@ -50,6 +50,8 @@ flowchart TB
 | `POST /api/reload` | `X-API-Key` | 手动触发索引 |
 | `GET /health` | `X-API-Key` | 返回 embedding / qdrant 可用状态（降级模式可观测） |
 
+**没有公网 IP 怎么收事件**：`rag_api/ws_bridge.py` 走飞书「长连接」模式——SDK 主动连飞书服务器鉴权收事件，再把事件转成标准事件体、按 `FEISHU_ENCRYPT_KEY` 自算签名 POST 本地 `/feishu/event`，完整复用「验签 → 部门硬过滤 → 回复」链路。长连接模式下 HTTP 签名层不承担安全职责（连接时已由 SDK 鉴权），保留签名只是不绕过既有代码路径、让安全回归继续覆盖它。依赖 `lark-oapi`（仅桥本身需要，rag_api 保持零第三方 SDK）。
+
 ## 三、权限感知检索怎么做到
 
 | 机制 | 实现位置 |
@@ -95,6 +97,19 @@ FEISHU_ENCRYPT_KEY=demo_key API_GLOBAL_KEY=demo_api python rag_api/mock_feishu_e
 
 **7/7 case(s) passed**（脚本以退出码体现结果：任一用例 FAIL 即 `exit 1`，CI 会变红；已实测把 `ALLOW_UNKNOWN_DEPT` 改成 `true` 后用例 6 立即报 FAIL 并以 1 退出）。
 
+### 接真实飞书（可选，模拟回归不依赖它）
+
+自建应用开通 `im:message` 权限、事件订阅选「长连接」并添加 `im.message.receive_v1`，然后：
+
+```bash
+pip install "lark-oapi" -U
+export FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx
+export FEISHU_ENCRYPT_KEY=与rag_api一致
+python rag_api/ws_bridge.py        # 先起 rag_api，再起桥
+```
+
+员工消息进来后，`rag_api/feishu_client.py`（只依赖标准库）换取 `tenant_access_token`（缓存、提前 300s 刷新）并把结果发回提问人（`FEISHU_REPLY_ENABLED=false` 可整体关闭回推）。生成层可选：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` **三项都配**才启用大模型组答案，否则回复检索命中的原文片段——安全链路（验签/部门过滤/fail-closed）不受该开关影响。
+
 ## 五、Docker 部署
 
 ```bash
@@ -138,11 +153,12 @@ python eval/eval.py --golden eval/evidence/golden_set_ecom.json   # 首次会自
 
 **包含**（均可运行、可复现）
 - 权限感知检索的完整实现：签名验签、身份解析、部门硬过滤、fail-closed、降级可用
+- 检索结果回推飞书（`feishu_client.py`，标准库实现）+ 长连接收事件（`ws_bridge.py`，内网可用）
 - 7 项安全用例回归（CI 门槛，失败即红）+ compose 配置校验
 - 三档语料的检索质量评测脚本与实跑证据
 
 **不包含**（属于生产部署环境，未纳入本仓库）
-- **答案生成层**：本仓库止于「命中片段 + 来源 + 分值」，不绑定具体大模型；生产环境中由部署侧的模型服务完成 Prompt 组装与生成、再推送回群
+- **默认不绑定大模型**：主链路止于「命中片段 + 来源 + 分值」；接生成层需自配 `LLM_*` 三项（见第四节），不配则以检索原文片段回复
 - 真实企业语料与 `dept_map` 生产数据（`dept_map.example.json` 仅为格式样例）
 - 生产级关键词检索：降级模式是字符重合度打分，仅为「无模型 / 无向量库时保持服务可启动、CI 可跑」，不是生产检索方案
 
@@ -154,7 +170,8 @@ python eval/eval.py --golden eval/evidence/golden_set_ecom.json   # 首次会自
 ## 八、目录结构
 
 ```
-rag_api/            FastAPI 检索服务（app.py v1.2）、飞书事件 mock、Dockerfile
+rag_api/            FastAPI 检索服务（app.py v1.2）、飞书事件 mock、回推客户端（feishu_client）、
+                    长连接桥（ws_bridge）、Dockerfile
 feishu_demo/        三部门演示语料 + dept_map.json（安全用例回归的数据底座）
 eval/               检索质量评测：黄金集、评测脚本、模拟电商场景实跑报告
 docker-compose.yml  gitea + qdrant（仅内网）+ rag_api 编排
@@ -164,4 +181,4 @@ SERVER-SETUP.md     服务器部署与 GitHub Secrets 配置说明
 
 ## 九、技术栈
 
-Python · FastAPI · Qdrant（metadata 硬过滤）· BGE embedding + bge-reranker-v2-m3 交叉编码器精排 · Gitea webhook 增量索引 · 飞书签名事件（身份盖章）· Docker Compose · GitHub Actions
+Python · FastAPI · Qdrant（metadata 硬过滤）· BGE embedding + bge-reranker-v2-m3 交叉编码器精排 · Gitea webhook 增量索引 · 飞书签名事件（身份盖章）+ 长连接事件桥 + 消息回推 · Docker Compose · GitHub Actions
