@@ -6,7 +6,7 @@
   GET  /health           健康检查（需 API Key）
   POST /api/reload       触发全量/增量索引（需 API Key）
   POST /api/retrieve     内部调试检索口（需 API Key，user_id 必填，fail-closed）
-  POST /webhook/gitea    Gitea Webhook 回调，自动重建索引
+  POST /webhook/gitea    Gitea Webhook 回调，自动重建索引（HMAC-SHA256 验签，fail-closed）
   POST /feishu/event     员工消息入口（对外路径，飞书签名鉴权，身份取自验签事件）
   GET  /docs             Swagger 文档（受 API Key 保护）
 
@@ -206,9 +206,20 @@ def reload(_=Depends(auth)):
 
 @app.post("/webhook/gitea")
 async def webhook(req: Request):
-    secret = req.headers.get("X-Gitea-Signature") or req.query_params.get("secret", "")
-    if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
-        raise HTTPException(status_code=403, detail="invalid webhook secret")
+    """Gitea webhook 来源校验：X-Gitea-Signature = hex(hmac_sha256(WEBHOOK_SECRET, raw_body))。
+
+    - 与 Gitea 出站 webhook 的标准签名机制一致（仓库 Settings -> Webhooks -> Secret）
+    - fail-closed：未配置 WEBHOOK_SECRET 时一律 403，本端点视为禁用
+    - 不再接受 query 明文 secret——旧实现等于把共享口令放进 URL（日志/代理可见），
+      且明文比对不绑定请求体，可被任意 body 重放
+    """
+    if not WEBHOOK_SECRET:
+        raise HTTPException(status_code=403, detail="webhook disabled: WEBHOOK_SECRET not set")
+    body = await req.body()
+    sig = req.headers.get("X-Gitea-Signature", "")
+    expected = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    if not sig or not hmac.compare_digest(sig, expected):
+        raise HTTPException(status_code=403, detail="invalid webhook signature")
     n = index_vault()
     return {"triggered": True, "indexed": n}
 

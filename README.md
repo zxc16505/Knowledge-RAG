@@ -45,7 +45,7 @@ flowchart TB
 | 端点 | 鉴权方式 | 说明 |
 |---|---|---|
 | `POST /feishu/event` | 飞书签名（对外路径，无需 API Key） | 员工消息入口；身份取自已验签事件体，解析部门后硬过滤检索 |
-| `POST /webhook/gitea` | `X-Gitea-Signature` / `?secret=` | 笔记仓库 push 后触发重建索引 |
+| `POST /webhook/gitea` | `X-Gitea-Signature`（HMAC-SHA256 验签，绑定请求体；未配 `WEBHOOK_SECRET` 时端点禁用） | 笔记仓库 push 后触发重建索引 |
 | `POST /api/retrieve` | `X-API-Key`（内部调试口） | `user_id` 必填，解析不到部门时 fail-closed |
 | `POST /api/reload` | `X-API-Key` | 手动触发索引 |
 | `GET /health` | `X-API-Key` | 返回 embedding / qdrant 可用状态（降级模式可观测） |
@@ -76,6 +76,9 @@ uvicorn rag_api.app:app --port 8000 &
 
 curl -X POST -H "X-API-Key: demo_api" http://127.0.0.1:8000/api/reload
 FEISHU_ENCRYPT_KEY=demo_key API_GLOBAL_KEY=demo_api python rag_api/mock_feishu_event.py
+
+# webhook HMAC 验签回归（服务需带 WEBHOOK_SECRET 启动，脚本用同一密钥）
+WEBHOOK_SECRET=demo_hook python rag_api/test_webhook_sig.py
 ```
 
 > **Windows 提示**：Git Bash 的 `$PWD` 是 `/c/...` 形式，原生 Python 读不到该路径，`/api/reload` 会返回 `{"indexed": 0}`。请改用 Windows 风格路径，例如 `VAULT_PATH=C:/path/to/Knowledge-RAG/feishu_demo/demo_vault`。
@@ -154,7 +157,7 @@ python eval/eval.py --golden eval/evidence/golden_set_ecom.json   # 首次会自
 **包含**（均可运行、可复现）
 - 权限感知检索的完整实现：签名验签、身份解析、部门硬过滤、fail-closed、降级可用
 - 检索结果回推飞书（`feishu_client.py`，标准库实现）+ 长连接收事件（`ws_bridge.py`，内网可用）
-- 7 项安全用例回归（CI 门槛，失败即红）+ compose 配置校验
+- 7 项安全用例回归 + 5 项 webhook HMAC 验签回归（均为 CI 门槛，失败即红）+ compose 配置校验
 - 三档语料的检索质量评测脚本与实跑证据
 
 **不包含**（属于生产部署环境，未纳入本仓库）
@@ -165,13 +168,12 @@ python eval/eval.py --golden eval/evidence/golden_set_ecom.json   # 首次会自
 **已知局限**
 - 评测语料为自建模拟（最大 32 篇 / 34 条），样本量不足以支撑统计显著结论
 - CPU 推理下 34 条查询的重排耗时 211.5s，未做量化 / 批量优化
-- Gitea webhook 目前是 secret 明文比对，未像飞书侧那样做 HMAC 签名校验 （见 `webhook()`）
 
 ## 八、目录结构
 
 ```
 rag_api/            FastAPI 检索服务（app.py v1.2）、飞书事件 mock、回推客户端（feishu_client）、
-                    长连接桥（ws_bridge）、Dockerfile
+                    长连接桥（ws_bridge）、webhook 验签回归（test_webhook_sig）、Dockerfile
 feishu_demo/        三部门演示语料 + dept_map.json（安全用例回归的数据底座）
 eval/               检索质量评测：黄金集、评测脚本、模拟电商场景实跑报告
 docker-compose.yml  gitea + qdrant（仅内网）+ rag_api 编排

@@ -19,7 +19,7 @@ jobs:
         run: pip install "fastapi>=0.111" "uvicorn[standard]>=0.30" pydantic httpx
 
       - name: Compile check
-        run: python -m py_compile rag_api/app.py rag_api/mock_feishu_event.py
+        run: python -m py_compile rag_api/app.py rag_api/mock_feishu_event.py rag_api/feishu_client.py rag_api/ws_bridge.py rag_api/test_webhook_sig.py
 
       - name: Start service with demo vault
         env:
@@ -27,6 +27,7 @@ jobs:
           DEPT_MAP_PATH: ${{ github.workspace }}/feishu_demo/dept_map.json
           FEISHU_ENCRYPT_KEY: ci_demo_encrypt_key
           API_GLOBAL_KEY: ci_demo_api_key
+          WEBHOOK_SECRET: ci_demo_hook_secret
           QDRANT_URL: ""
         run: |
           cd rag_api
@@ -43,6 +44,11 @@ jobs:
           FEISHU_ENCRYPT_KEY: ci_demo_encrypt_key
           API_GLOBAL_KEY: ci_demo_api_key
         run: cd rag_api && python mock_feishu_event.py
+
+      - name: Run webhook HMAC signature regression (expect 5/5 PASS)
+        env:
+          WEBHOOK_SECRET: ci_demo_hook_secret
+        run: cd rag_api && python test_webhook_sig.py
 
   compose-validate:
     runs-on: ubuntu-latest
