@@ -4,7 +4,7 @@
 
 个人项目，脱敏复现企业知识库问答里**最容易做错的一层——授权**：检索在服务端按提问人身份做部门**硬过滤**，权限约束在模型上下文之外确定性生效，提示词注入改变不了过滤域。
 
-> 语料为脱敏 / 模拟的企业文档，非任何公司生产数据；评测数字均注明「模拟电商场景」。
+
 
 **30 秒可验证**：不需要 GPU、不需要模型权重、不需要向量库。关键词降级模式下 7 项安全用例全绿（CI 每次 push 都跑，失败即红），Docker Compose 一条命令起完整栈。
 
@@ -63,7 +63,7 @@ flowchart TB
 | **降级可用** | 无 Qdrant / 无模型权重时自动切关键词检索，**权限过滤同样生效**（CI 即跑此模式） |
 | **只读挂载** | `./feishu_demo/demo_vault:/vault:ro`，服务绝不写入源笔记 |
 
-## 四、快速开始（无需 GPU / 模型权重）
+## 四、快速开始
 
 ```bash
 pip install fastapi "uvicorn[standard]" pydantic
@@ -100,7 +100,7 @@ WEBHOOK_SECRET=demo_hook python rag_api/test_webhook_sig.py
 
 **7/7 case(s) passed**（脚本以退出码体现结果：任一用例 FAIL 即 `exit 1`，CI 会变红；已实测把 `ALLOW_UNKNOWN_DEPT` 改成 `true` 后用例 6 立即报 FAIL 并以 1 退出）。
 
-### 接真实飞书（可选，模拟回归不依赖它）
+### 接真实飞书
 
 自建应用开通 `im:message` 权限、事件订阅选「长连接」并添加 `im.message.receive_v1`，然后：
 
@@ -152,8 +152,6 @@ python eval/eval.py --golden eval/evidence/golden_set_ecom.json   # 首次会自
 
 ## 七、本仓库包含 / 不包含什么
 
-说清楚边界，比夸大能力更有用：
-
 **包含**（均可运行、可复现）
 - 权限感知检索的完整实现：签名验签、身份解析、部门硬过滤、fail-closed、降级可用
 - 检索结果回推飞书（`feishu_client.py`，标准库实现）+ 长连接收事件（`ws_bridge.py`，内网可用）
@@ -161,7 +159,7 @@ python eval/eval.py --golden eval/evidence/golden_set_ecom.json   # 首次会自
 - 三档语料的检索质量评测脚本与实跑证据
 
 **不包含**（属于生产部署环境，未纳入本仓库）
-- **默认不绑定大模型**：主链路止于「命中片段 + 来源 + 分值」；接生成层需自配 `LLM_*` 三项（见第四节），不配则以检索原文片段回复
+- **默认不绑定大模型**：主链路止于「命中片段 + 来源 + 分值」；接生成层需自配 `LLM_*` 三项，不配则以检索原文片段回复
 - 真实企业语料与 `dept_map` 生产数据（`dept_map.example.json` 仅为格式样例）
 - 生产级关键词检索：降级模式是字符重合度打分，仅为「无模型 / 无向量库时保持服务可启动、CI 可跑」，不是生产检索方案
 
