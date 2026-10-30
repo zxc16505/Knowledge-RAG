@@ -38,8 +38,8 @@ flowchart TB
     EV --> AUTH["身份 → 授权部门集合<br/>dept_map.json 查表<br/>查不到 = fail-closed"]
     RT --> AUTH
     AUTH --> QD["Qdrant 检索<br/>filter: must department ∈ {本部门, 公共}<br/>越权文档不进入候选集"]
-    QD --> RK["bge-reranker-v2-m3<br/>交叉编码器精排"]
-    RK --> OUT["返回命中片段 + 来源文件 + 分值<br/>（空结果 = 未找到）"]
+    QD --> OUT["返回命中片段 + 来源文件 + 分值<br/>（空结果 = 未找到）"]
+    QD -.->|"仅离线评测：取 top-k 候选"| RK["bge-reranker-v2-m3 交叉编码器<br/>（只用于 eval/，不在在线链路）"]
 ```
 
 | 端点 | 鉴权方式 | 说明 |
@@ -178,4 +178,4 @@ SERVER-SETUP.md     服务器部署与 GitHub Secrets 配置说明
 
 ## 九、技术栈
 
-Python · FastAPI · Qdrant（metadata 硬过滤）· BGE embedding + bge-reranker-v2-m3 交叉编码器精排 · Gitea webhook 增量索引 · 飞书签名事件（身份盖章）+ 长连接事件桥 + 消息回推 · Docker Compose · GitHub Actions
+Python · FastAPI · Qdrant（metadata 硬过滤）· BGE embedding 双塔召回（**在线为单阶段**；bge-reranker-v2-m3 交叉编码器仅用于 `eval/` 离线对比）· Gitea webhook 触发**全量重建**索引 · 飞书签名事件（身份盖章）+ 长连接事件桥 + 消息回推 · Docker Compose · GitHub Actions
